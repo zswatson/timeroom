@@ -1,0 +1,3 @@
+Exposure smoothing and variable tweening for timelapses in RAW
+image formats. Currently only supports Adobe Photoshop NEF files
+from Lightroom 4.

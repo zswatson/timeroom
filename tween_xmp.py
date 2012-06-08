@@ -1,11 +1,9 @@
+from argparse import ArgumentParser
 import os, sys, math, time, datetime
 import xmp
 
-SCOPE = 600 ## number of seconds before and after a frame to
-            ## consider when adjusting exposure
-
-def calc_exposure_correction_for_xmp(current_xmp, all_xmps):
-    shutter_av, aperture_av = calc_average(current_xmp, all_xmps)
+def calc_exposure_correction_for_xmp(current_xmp, all_xmps, scope):
+    shutter_av, aperture_av = calc_average(current_xmp, all_xmps, scope)
     current_shutter = current_xmp.get_val(xmp.SHUTTERTIME)
     current_aperture = current_xmp.get_val(xmp.FNUMBER)
 
@@ -38,12 +36,12 @@ def set_tweened_values(start_xmp, end_xmp, current_xmp):
             current_xmp.set_val(variable, start + (end - start) * ratio)
 
 
-def calc_average(current_xmp, all_xmps): 
+def calc_average(current_xmp, all_xmps, scope): 
 
     start_index = 0
     while True:
         tdelta = (current_xmp.datetime - all_xmps[start_index].datetime).seconds
-        if tdelta <= SCOPE:
+        if tdelta <= scope:
             break
         start_index += 1
 
@@ -51,7 +49,7 @@ def calc_average(current_xmp, all_xmps):
     
     while True:
         tdelta = (all_xmps[end_index].datetime - current_xmp.datetime).seconds
-        if tdelta > SCOPE:
+        if tdelta > scope:
             break
         end_index += 1
         if end_index >= len(all_xmps):
@@ -100,7 +98,7 @@ def load_xmps(source_folder):
  
     return tweenpoints, all_xmps
 
-def compensate_tweenpoints(tweenpoints, all_xmps):
+def compensate_tweenpoints(tweenpoints, all_xmps, scope):
     """ For all tweenpoints, calculate exposure correction, and subtract it from
         the given exposure correction (in order to factor it out of the tweening).
         Operates on all_xmps in place.
@@ -108,7 +106,7 @@ def compensate_tweenpoints(tweenpoints, all_xmps):
 
     for t in tweenpoints:
         current_xmp = all_xmps[t]
-        exposure_correction = calc_exposure_correction_for_xmp(current_xmp, all_xmps)
+        exposure_correction = calc_exposure_correction_for_xmp(current_xmp, all_xmps, scope)
         current_exposure = current_xmp.get_val(xmp.EXPOSURE)
         if not current_exposure:
             current_exposure = 0
@@ -143,7 +141,7 @@ def tween_xmps(tweenpoints, all_xmps):
 
             set_tweened_values(all_xmps[start_tweenpoint], all_xmps[end_tweenpoint], current_xmp)
 
-def smooth_exposures(tweenpoints, all_xmps):
+def smooth_exposures(tweenpoints, all_xmps, scope):
     """ Smooths exposures in place
     """
 
@@ -152,7 +150,7 @@ def smooth_exposures(tweenpoints, all_xmps):
         # Calculate the exposure correction, and add it to any tweened exposure value
         #
 
-        exposure_correction = calc_exposure_correction_for_xmp(current_xmp, all_xmps)                  
+        exposure_correction = calc_exposure_correction_for_xmp(current_xmp, all_xmps, scope)                  
         current_exposure = current_xmp.get_val(xmp.EXPOSURE)
         
         current_xmp.set_val(xmp.EXPOSURE, current_exposure + exposure_correction)
@@ -171,16 +169,67 @@ def set_for_all_xmps(all_xmps, variable, value):
     for current_xmp in all_xmps:
         current_xmp.set_val(variable, value)
 
-tweenpoints, all_xmps = load_xmps('./old_xmps')
-outfolder = '.'
+parser = ArgumentParser(description="""tween_xmp.py [options] folder
 
-try:
-    os.mkdir(outfolder)
-except:
-    pass
+Loads all the xmps in a folder, and picks tweenpoints based on edited xmps.
 
-compensate_tweenpoints(tweenpoints, all_xmps)
-tween_xmps(tweenpoints, all_xmps)
-smooth_exposures(tweenpoints, all_xmps)
-##set_for_all_xmps(xmp.CAMERAPROFILE, 'D40_IR_1')
-write_xmps
+""")
+
+defaults = dict(tween=False, exposure_smoothing=None, static_vars=[], dest=None)
+
+parser.set_defaults(**defaults)
+
+parser.add_argument('folder', help='Source folder for xmps')
+
+parser.add_argument('-d', '--destination', help='Destination folder for xmps', dest='dest')
+
+parser.add_argument('-t', '--tween', dest='tween',
+                  help='Tween between altered xmps.', action="store_true")
+
+parser.add_argument('-x', '--exposure_smoothing', dest='exposure_smoothing', type=float, action="store",
+                  help='Seconds on either side to consider when smoothing exposures')
+
+parser.add_argument('-v', '--var', dest='static_vars', nargs='*',
+                  help='Variable and value to set for all xmps',
+                  action='append')
+
+if __name__ == '__main__':
+
+    args = parser.parse_args()
+
+    statics = {}
+    if len(args.static_vars) % 2 != 0:
+        raise Exception
+    else:
+        for i in range(0, len(args.static_vars), 2):
+            statics[args.static_vars[i]] = args.static_vars[i + 1]
+
+    tweenpoints, all_xmps = load_xmps(args.folder)
+    if args.dest is not None:
+        outfolder = args.dest
+    else:
+        outfolder = args.folder
+
+    try:
+        os.mkdir(outfolder)
+    except:
+        pass
+
+    if not args.exposure_smoothing is None:
+        compensate_tweenpoints(tweenpoints, all_xmps, args.exposure_smoothing)
+
+    if args.tween:
+        tween_xmps(tweenpoints, all_xmps)
+
+    if not args.exposure_smoothing is None:
+        smooth_exposures(tweenpoints, all_xmps, args.exposure_smoothing)
+
+    for var in statics:
+        set_for_all_xmps(var, statics[var])
+        
+    write_xmps(all_xmps, outfolder)
+
+
+
+
+
